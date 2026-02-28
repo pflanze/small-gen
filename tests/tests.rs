@@ -44,18 +44,39 @@ fn owned_string() {
 }
 
 #[test]
-fn repeat_none_at_end() {
-    use gen::generate;
+fn try_repeat_none_at_end() {
+    use gen::try_generate;
 
-    let mut iter = generate(|co| async move {
+    let mut iter = try_generate(async move |co| -> Result<(), &'static str> {
         co.yield_(0).await;
         co.yield_(1).await;
         co.yield_(2).await;
+        Ok(())
     });
 
-    assert_eq!(iter.next(), Some(0));
-    assert_eq!(iter.next(), Some(1));
-    assert_eq!(iter.next(), Some(2));
+    assert_eq!(iter.next(), Some(Ok(0)));
+    assert_eq!(iter.next(), Some(Ok(1)));
+    assert_eq!(iter.next(), Some(Ok(2)));
+    assert_eq!(iter.next(), None);
+    assert_eq!(iter.next(), None);
+    assert_eq!(iter.next(), None);
+}
+
+#[test]
+fn try_repeat_err() {
+    use gen::try_generate;
+
+    let mut iter = try_generate(async move |co| -> Result<(), &'static str> {
+        co.yield_(0).await;
+        co.yield_(1).await;
+        Err("fun")?;
+        co.yield_(2).await;
+        Ok(())
+    });
+
+    assert_eq!(iter.next(), Some(Ok(0)));
+    assert_eq!(iter.next(), Some(Ok(1)));
+    assert_eq!(iter.next(), Some(Err("fun")));
     assert_eq!(iter.next(), None);
     assert_eq!(iter.next(), None);
     assert_eq!(iter.next(), None);

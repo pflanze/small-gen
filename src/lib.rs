@@ -45,6 +45,31 @@ use std::{
 
 use lazy_static::lazy_static;
 
+// Shared state between Communication and Generator.
+//
+// Rc<RefCell<Option<Item>>> would work, but would prevent
+// Generator from being able to move between threads.
+type SharedState<Item> = Arc<Mutex<Option<Item>>>;
+
+/// An iterator which synchronously produces items yielded by an async function.
+///
+/// [generate] returns this. See [crate documentation](crate) for usage.
+pub struct Generator<Item, Fut: Future<Output = ()>> {
+    shared: SharedState<Item>,
+    future: Pin<Box<Fut>>,
+    done: bool,
+}
+
+/// An iterator which synchronously produces Result items yielded by
+/// an async function that also returns a Result (hence can use `?`).
+///
+/// [generate] returns this. See [crate documentation](crate) for usage.
+pub struct TryGenerator<Item, E, Fut: Future<Output = Result<(), E>>> {
+    shared: SharedState<Item>,
+    future: Pin<Box<Fut>>,
+    done: bool,
+}
+
 /// Turn an async function into a fully-synchronous [Iterator].
 ///
 /// See [crate documentation](crate) for usage.
@@ -62,11 +87,19 @@ where
     }
 }
 
-// Shared state between Communication and Generator.
-//
-// Rc<RefCell<Option<Item>>> would work, but would prevent
-// Generator from being able to move between threads.
-type SharedState<Item> = Arc<Mutex<Option<Item>>>;
+pub fn try_generate<Item, E, F, Fut>(f: F) -> TryGenerator<Item, E, Fut>
+where
+    F: FnOnce(Communication<Item>) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+{
+    let shared: SharedState<Item> = Default::default();
+    let future = Box::pin(f(Communication(shared.clone())));
+    TryGenerator {
+        shared,
+        future,
+        done: false,
+    }
+}
 
 struct Waker;
 
@@ -78,15 +111,6 @@ lazy_static! {
     static ref WAKER: std::task::Waker = Arc::new(Waker).into();
 }
 
-/// An iterator which synchronously produces items yielded by an async function.
-///
-/// [generate] returns this. See [crate documentation](crate) for usage.
-pub struct Generator<Item, Fut: Future<Output = ()>> {
-    shared: SharedState<Item>,
-    future: Pin<Box<Fut>>,
-    done: bool,
-}
-
 impl<Item, Fut: Future<Output = ()>> Iterator for Generator<Item, Fut> {
     type Item = Item;
 
@@ -96,20 +120,53 @@ impl<Item, Fut: Future<Output = ()>> Iterator for Generator<Item, Fut> {
         }
 
         // Execute future until it yields a new value or finishes.
-        while self
-            .future
-            .as_mut()
-            .poll(&mut Context::from_waker(&WAKER))
-            .is_pending()
-        {
-            let out = self.shared.lock().unwrap().take();
-            if out.is_some() {
-                return out;
+        loop {
+            let poll = self.future.as_mut().poll(&mut Context::from_waker(&WAKER));
+
+            match poll {
+                Poll::Ready(()) => {
+                    self.done = true;
+                    return None;
+                }
+                Poll::Pending => {
+                    let out = self.shared.lock().unwrap().take();
+                    if out.is_some() {
+                        return out;
+                    }
+                }
             }
         }
+    }
+}
 
-        self.done = true;
-        None
+impl<Item, E, Fut: Future<Output = Result<(), E>>> Iterator for TryGenerator<Item, E, Fut> {
+    type Item = Result<Item, E>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        // Execute future until it yields a new value or finishes.
+        loop {
+            let poll = self.future.as_mut().poll(&mut Context::from_waker(&WAKER));
+
+            match poll {
+                Poll::Ready(val) => {
+                    self.done = true;
+                    return match val {
+                        Ok(()) => None,
+                        Err(e) => Some(Err(e)),
+                    };
+                }
+                Poll::Pending => {
+                    let out = self.shared.lock().unwrap().take();
+                    if out.is_some() {
+                        return Ok(out).transpose();
+                    }
+                }
+            }
+        }
     }
 }
 
