@@ -183,36 +183,32 @@ pub struct Communication<Item>(SharedState<Item>);
 impl<Item> Communication<Item> {
     /// Pass a single value to [Generator]. `yield_` acts as
     /// an async function.
-    pub fn yield_(&self, item: Item) -> YieldFuture<'_, Item> {
-        YieldFuture {
-            shared: &self.0,
-            value: Some(item),
-        }
+    pub fn yield_(&self, item: Item) -> YieldFuture {
+        let mut lock = self.0.lock().unwrap();
+        lock.replace(item);
+        YieldFuture { done: false }
     }
 }
 
 /// Future returned by [Communication::yield_]
-pub struct YieldFuture<'a, Item> {
-    shared: &'a Mutex<Option<Item>>,
-    value: Option<Item>,
+pub struct YieldFuture {
+    done: bool,
 }
 
 // YieldFuture doesn't point to itself
-impl<'a, Item> Unpin for YieldFuture<'a, Item> {}
+impl Unpin for YieldFuture {}
 
-impl<'a, Item> Future for YieldFuture<'a, Item> {
+impl Future for YieldFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Why does it need this two-call hack?
         let this = self.get_mut();
-        let mut lock = this.shared.lock().unwrap();
-        if let Some(item) = this.value.take() {
-            lock.replace(item);
-            Poll::Pending
-        } else if lock.is_some() {
-            panic!("YieldFuture used within incorrect executor")
-        } else {
+        if this.done {
             Poll::Ready(())
+        } else {
+            this.done = true;
+            Poll::Pending
         }
     }
 }
