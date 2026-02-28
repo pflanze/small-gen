@@ -43,6 +43,8 @@ use std::{
     task::{Context, Poll, Wake},
 };
 
+use lazy_static::lazy_static;
+
 /// Turn an async function into a fully-synchronous [Iterator].
 ///
 /// See [crate documentation](crate) for usage.
@@ -66,6 +68,16 @@ where
 // Generator from being able to move between threads.
 type SharedState<Item> = Arc<Mutex<Option<Item>>>;
 
+struct Waker;
+
+impl Wake for Waker {
+    fn wake(self: Arc<Self>) {}
+}
+
+lazy_static! {
+    static ref WAKER: std::task::Waker = Arc::new(Waker).into();
+}
+
 /// An iterator which synchronously produces items yielded by an async function.
 ///
 /// [generate] returns this. See [crate documentation](crate) for usage.
@@ -83,17 +95,11 @@ impl<Item, Fut: Future<Output = ()>> Iterator for Generator<Item, Fut> {
             return None;
         }
 
-        struct Waker;
-        impl Wake for Waker {
-            fn wake(self: Arc<Self>) {}
-        }
-        let waker = Arc::new(Waker).into();
-
         // Execute future until it yields a new value or finishes.
         while self
             .future
             .as_mut()
-            .poll(&mut Context::from_waker(&waker))
+            .poll(&mut Context::from_waker(&WAKER))
             .is_pending()
         {
             let out = self.shared.lock().unwrap().take();
