@@ -120,7 +120,7 @@ pub struct Communication<Item>(SharedState<Item>);
 impl<Item> Communication<Item> {
     /// Pass a single value to [Generator]. `yield_` acts as
     /// an async function.
-    pub fn yield_(&self, item: Item) -> YieldFuture<Item> {
+    pub fn yield_(&self, item: Item) -> YieldFuture<'_, Item> {
         YieldFuture {
             shared: &self.0,
             value: Some(item),
