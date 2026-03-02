@@ -2,11 +2,10 @@
 
 //! Basic implementation of async generators.
 //!
-//! [generate] turns an async function into a fully-synchronous [Iterator].
-//!
 //! ## Example
 //!
 //! ```
+//! // use `gen::sync::generate` instead if you need to work across threads
 //! use gen::fast::generate;
 //!
 //! // Create an iterator. The argument `co` allows the async block to
@@ -33,7 +32,22 @@
 //!     println!("j = {j}");
 //! }
 //!
-//! println!("done");
+//! // To create generators that can fail, use `try_generate`
+//! use gen::fast::try_generate;
+//!
+//! let mut iter = try_generate(async move |co| -> Result<(), &'static str> {
+//!     co.yield_(0).await;
+//!     co.yield_(1).await;
+//!     Err("fail")?;
+//!     co.yield_(2).await;
+//!     Ok(())
+//! });
+//!
+//! assert_eq!(iter.next(), Some(Ok(0)));
+//! assert_eq!(iter.next(), Some(Ok(1)));
+//! assert_eq!(iter.next(), Some(Err("fail")));
+//! assert_eq!(iter.next(), None);
+//! assert_eq!(iter.next(), None);
 //! ```
 
 use std::{
@@ -118,7 +132,8 @@ impl<Item> SharedState for SyncSharedState<Item> {
 
 /// An iterator which synchronously produces items yielded by an async function.
 ///
-/// [generate] returns this. See [crate documentation](crate) for usage.
+/// [fast::generate] and [sync::generate] return this. See [crate
+/// documentation](crate) for usage.
 pub struct Generator<Item, St: SharedState<Item = Item>, Fut: Future<Output = ()>> {
     shared: St,
     future: Pin<Box<Fut>>,
@@ -129,7 +144,8 @@ pub struct Generator<Item, St: SharedState<Item = Item>, Fut: Future<Output = ()
 /// an async function that also returns a Result (hence can use `?` in
 /// its body).
 ///
-/// [generate] returns this. See [crate documentation](crate) for usage.
+/// [fast::try_generate] and [sync::try_generate] return this. See
+/// [crate documentation](crate) for usage.
 pub struct TryGenerator<Item, E, St: SharedState<Item = Item>, Fut: Future<Output = Result<(), E>>>
 {
     shared: St,
@@ -142,7 +158,10 @@ pub mod fast {
 
     use crate::{Communication, FastSharedState, Generator, TryGenerator};
 
-    /// Turn an async function into a fully-synchronous [Iterator].
+    /// Turn an async function receiving a value to `yield` on into an
+    /// [Iterator]. The returned iterator is not `Sync`. For a version
+    /// that returns an iterator that is `Sync` but slower, see
+    /// [crate::sync::generate].
     ///
     /// See [crate documentation](crate) for usage.
     pub fn generate<Item, F, Fut>(f: F) -> Generator<Item, FastSharedState<Item>, Fut>
@@ -159,6 +178,11 @@ pub mod fast {
         }
     }
 
+    /// Like `generate` but creating an iterator that returns `Result`
+    /// values. An `Err` returned from the function is returned from
+    /// the iterator, while values passed to the `yield` method are
+    /// returned from the iterator as `Ok`. This means the function
+    /// can use `?` in its body.
     pub fn try_generate<Item, E, F, Fut>(f: F) -> TryGenerator<Item, E, FastSharedState<Item>, Fut>
     where
         F: FnOnce(Communication<Item, FastSharedState<Item>>) -> Fut,
@@ -179,9 +203,12 @@ pub mod sync {
 
     use crate::{Communication, Generator, SyncSharedState, TryGenerator};
 
-    /// Turn an async function into a fully-synchronous [Iterator].
+    /// Turn an async function receiving a value to `yield` on into an
+    /// [Iterator]. The returned iterator is `Sync`. For a version
+    /// that returns an iterator that is not, but faster, see
+    /// [crate::fast::generate].
     ///
-    /// See [crate documentation](crate) for usage. This
+    /// See [crate documentation](crate) for usage.
     pub fn generate<Item, F, Fut>(f: F) -> Generator<Item, SyncSharedState<Item>, Fut>
     where
         F: FnOnce(Communication<Item, SyncSharedState<Item>>) -> Fut,
@@ -196,6 +223,11 @@ pub mod sync {
         }
     }
 
+    /// Like `generate` but creating an iterator that returns `Result`
+    /// values. An `Err` returned from the function is returned from
+    /// the iterator, while values passed to the `yield` method are
+    /// returned from the iterator as `Ok`. This means the function
+    /// can use `?` in its body.
     pub fn try_generate<Item, E, F, Fut>(f: F) -> TryGenerator<Item, E, SyncSharedState<Item>, Fut>
     where
         F: FnOnce(Communication<Item, SyncSharedState<Item>>) -> Fut,
