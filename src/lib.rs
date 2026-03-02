@@ -60,6 +60,8 @@ use std::{
 };
 
 use lazy_static::lazy_static;
+#[cfg(feature = "rayon")]
+use rayon::iter::{ParallelIterator, plumbing::Folder};
 
 // Shared state between Communication and Generator.
 
@@ -151,6 +153,40 @@ pub struct TryGenerator<Item, E, St: SharedState<Item = Item>, Fut: Future<Outpu
     shared: St,
     future: Pin<Box<Fut>>,
     done: bool,
+}
+
+/// Just to avoid the overhead of ParBridge, doesn't actually make the
+/// iterator execute in parallel
+#[cfg(feature = "rayon")]
+impl<Item: Send, Fut: Future<Output = ()> + Send> ParallelIterator
+    for Generator<Item, SyncSharedState<Item>, Fut>
+{
+    type Item = Item;
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: rayon::iter::plumbing::UnindexedConsumer<Self::Item>,
+    {
+        let folder = consumer.into_folder();
+        folder.consume_iter(self).complete()
+    }
+}
+
+/// Just to avoid the overhead of ParBridge, doesn't actually make the
+/// iterator execute in parallel
+#[cfg(feature = "rayon")]
+impl<Item: Send, E: Send, Fut: Future<Output = Result<(), E>> + Send> ParallelIterator
+    for TryGenerator<Item, E, SyncSharedState<Item>, Fut>
+{
+    type Item = Result<Item, E>;
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: rayon::iter::plumbing::UnindexedConsumer<Self::Item>,
+    {
+        let folder = consumer.into_folder();
+        folder.consume_iter(self).complete()
+    }
 }
 
 pub mod fast {
