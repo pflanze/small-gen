@@ -1,6 +1,6 @@
 #[test]
 fn no_state() {
-    use gen::fast::generate;
+    use small_gen::fast::generate;
 
     assert_eq!(
         generate(|co| async move {
@@ -15,7 +15,7 @@ fn no_state() {
 
 #[test]
 fn static_str_ref() {
-    use gen::fast::generate;
+    use small_gen::fast::generate;
 
     assert_eq!(
         generate(|co| async move {
@@ -30,7 +30,7 @@ fn static_str_ref() {
 
 #[test]
 fn owned_string() {
-    use gen::fast::generate;
+    use small_gen::fast::generate;
 
     assert_eq!(
         generate(|co| async move {
@@ -45,7 +45,7 @@ fn owned_string() {
 
 #[test]
 fn try_repeat_none_at_end() {
-    use gen::fast::try_generate;
+    use small_gen::fast::try_generate;
 
     let mut iter = try_generate(async move |co| -> Result<(), &'static str> {
         co.yield_(0).await;
@@ -64,7 +64,7 @@ fn try_repeat_none_at_end() {
 
 #[test]
 fn try_repeat_err() {
-    use gen::fast::try_generate;
+    use small_gen::fast::try_generate;
 
     let mut iter = try_generate(async move |co| -> Result<(), &'static str> {
         co.yield_(0).await;
@@ -84,7 +84,7 @@ fn try_repeat_err() {
 
 #[test]
 fn local_var() {
-    use gen::fast::generate;
+    use small_gen::fast::generate;
 
     assert_eq!(
         generate(|co| async move {
@@ -99,7 +99,7 @@ fn local_var() {
 
 #[test]
 fn mut_ref() {
-    use gen::fast::generate;
+    use small_gen::fast::generate;
 
     let mut i = 0;
     let ir = &mut i;
@@ -120,7 +120,7 @@ fn mut_ref() {
 
 #[test]
 fn move_iter_to_thread() {
-    use gen::sync::generate;
+    use small_gen::sync::generate;
     use std::thread;
 
     // The async block borrows `i` via `ir`

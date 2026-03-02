@@ -1,12 +1,12 @@
-// Todd Fleming 2023
+// Todd Fleming 2023 & Christian Jaeger 2026
 
 //! Basic implementation of async generators.
 //!
 //! ## Example
 //!
 //! ```
-//! // use `gen::sync::generate` instead if you need to work across threads
-//! use gen::fast::generate;
+//! // use `small_gen::sync::generate` instead if you need to work across threads
+//! use small_gen::fast::generate;
 //!
 //! // Create an iterator. The argument `co` allows the async block to
 //! // send items to the iterator. Everything runs on a single thread.
@@ -33,7 +33,7 @@
 //! }
 //!
 //! // To create generators that can fail, use `try_generate`
-//! use gen::fast::try_generate;
+//! use small_gen::fast::try_generate;
 //!
 //! let mut iter = try_generate(async move |co| -> Result<(), &'static str> {
 //!     co.yield_(0).await;
