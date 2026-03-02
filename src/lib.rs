@@ -7,7 +7,7 @@
 //! ## Example
 //!
 //! ```
-//! use gen::generate;
+//! use gen::fast::generate;
 //!
 //! // Create an iterator. The argument `co` allows the async block to
 //! // send items to the iterator. Everything runs on a single thread.
@@ -37,8 +37,10 @@
 //! ```
 
 use std::{
+    cell::Cell,
     future::Future,
     pin::Pin,
+    rc::Rc,
     sync::{Arc, Mutex},
     task::{Context, Poll, Wake},
 };
@@ -46,58 +48,166 @@ use std::{
 use lazy_static::lazy_static;
 
 // Shared state between Communication and Generator.
-//
-// Rc<RefCell<Option<Item>>> would work, but would prevent
-// Generator from being able to move between threads.
-type SharedState<Item> = Arc<Mutex<Option<Item>>>;
+
+pub trait SharedState: Default + Clone {
+    type Item;
+    fn new() -> Self;
+    fn take(&self) -> Option<Self::Item>;
+    fn set(&self, val: Self::Item);
+}
+
+pub struct FastSharedState<Item>(Rc<Cell<Option<Item>>>);
+
+impl<Item> Default for FastSharedState<Item> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl<Item> Clone for FastSharedState<Item> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<Item> SharedState for FastSharedState<Item> {
+    type Item = Item;
+
+    fn new() -> Self {
+        Self(Rc::new(Cell::new(None)))
+    }
+
+    fn take(&self) -> Option<Self::Item> {
+        self.0.take()
+    }
+
+    fn set(&self, val: Self::Item) {
+        self.0.set(Some(val));
+    }
+}
+
+pub struct SyncSharedState<Item>(Arc<Mutex<Option<Item>>>);
+
+impl<Item> Default for SyncSharedState<Item> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl<Item> Clone for SyncSharedState<Item> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<Item> SharedState for SyncSharedState<Item> {
+    type Item = Item;
+
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+
+    fn take(&self) -> Option<Self::Item> {
+        self.0.lock().expect("no panics").take()
+    }
+
+    fn set(&self, val: Self::Item) {
+        _ = self.0.lock().expect("no panics").insert(val);
+    }
+}
 
 /// An iterator which synchronously produces items yielded by an async function.
 ///
 /// [generate] returns this. See [crate documentation](crate) for usage.
-pub struct Generator<Item, Fut: Future<Output = ()>> {
-    shared: SharedState<Item>,
+pub struct Generator<Item, St: SharedState<Item = Item>, Fut: Future<Output = ()>> {
+    shared: St,
     future: Pin<Box<Fut>>,
     done: bool,
 }
 
 /// An iterator which synchronously produces Result items yielded by
-/// an async function that also returns a Result (hence can use `?`).
+/// an async function that also returns a Result (hence can use `?` in
+/// its body).
 ///
 /// [generate] returns this. See [crate documentation](crate) for usage.
-pub struct TryGenerator<Item, E, Fut: Future<Output = Result<(), E>>> {
-    shared: SharedState<Item>,
+pub struct TryGenerator<Item, E, St: SharedState<Item = Item>, Fut: Future<Output = Result<(), E>>>
+{
+    shared: St,
     future: Pin<Box<Fut>>,
     done: bool,
 }
 
-/// Turn an async function into a fully-synchronous [Iterator].
-///
-/// See [crate documentation](crate) for usage.
-pub fn generate<Item, F, Fut>(f: F) -> Generator<Item, Fut>
-where
-    F: FnOnce(Communication<Item>) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    let shared: SharedState<Item> = Default::default();
-    let future = Box::pin(f(Communication(shared.clone())));
-    Generator {
-        shared,
-        future,
-        done: false,
+pub mod fast {
+    use std::future::Future;
+
+    use crate::{Communication, FastSharedState, Generator, TryGenerator};
+
+    /// Turn an async function into a fully-synchronous [Iterator].
+    ///
+    /// See [crate documentation](crate) for usage.
+    pub fn generate<Item, F, Fut>(f: F) -> Generator<Item, FastSharedState<Item>, Fut>
+    where
+        F: FnOnce(Communication<Item, FastSharedState<Item>>) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let shared: FastSharedState<Item> = Default::default();
+        let future = Box::pin(f(Communication(shared.clone())));
+        Generator {
+            shared,
+            future,
+            done: false,
+        }
+    }
+
+    pub fn try_generate<Item, E, F, Fut>(f: F) -> TryGenerator<Item, E, FastSharedState<Item>, Fut>
+    where
+        F: FnOnce(Communication<Item, FastSharedState<Item>>) -> Fut,
+        Fut: Future<Output = Result<(), E>>,
+    {
+        let shared: FastSharedState<Item> = Default::default();
+        let future = Box::pin(f(Communication(shared.clone())));
+        TryGenerator {
+            shared,
+            future,
+            done: false,
+        }
     }
 }
 
-pub fn try_generate<Item, E, F, Fut>(f: F) -> TryGenerator<Item, E, Fut>
-where
-    F: FnOnce(Communication<Item>) -> Fut,
-    Fut: Future<Output = Result<(), E>>,
-{
-    let shared: SharedState<Item> = Default::default();
-    let future = Box::pin(f(Communication(shared.clone())));
-    TryGenerator {
-        shared,
-        future,
-        done: false,
+pub mod sync {
+    use std::future::Future;
+
+    use crate::{Communication, Generator, SyncSharedState, TryGenerator};
+
+    /// Turn an async function into a fully-synchronous [Iterator].
+    ///
+    /// See [crate documentation](crate) for usage. This
+    pub fn generate<Item, F, Fut>(f: F) -> Generator<Item, SyncSharedState<Item>, Fut>
+    where
+        F: FnOnce(Communication<Item, SyncSharedState<Item>>) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let shared: SyncSharedState<Item> = Default::default();
+        let future = Box::pin(f(Communication(shared.clone())));
+        Generator {
+            shared,
+            future,
+            done: false,
+        }
+    }
+
+    pub fn try_generate<Item, E, F, Fut>(f: F) -> TryGenerator<Item, E, SyncSharedState<Item>, Fut>
+    where
+        F: FnOnce(Communication<Item, SyncSharedState<Item>>) -> Fut,
+        Fut: Future<Output = Result<(), E>>,
+    {
+        let shared: SyncSharedState<Item> = Default::default();
+        let future = Box::pin(f(Communication(shared.clone())));
+        TryGenerator {
+            shared,
+            future,
+            done: false,
+        }
     }
 }
 
@@ -112,7 +222,9 @@ lazy_static! {
     static ref WAKER: std::task::Waker = Arc::new(Waker).into();
 }
 
-impl<Item, Fut: Future<Output = ()>> Iterator for Generator<Item, Fut> {
+impl<Item, St: SharedState<Item = Item>, Fut: Future<Output = ()>> Iterator
+    for Generator<Item, St, Fut>
+{
     type Item = Item;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -130,7 +242,7 @@ impl<Item, Fut: Future<Output = ()>> Iterator for Generator<Item, Fut> {
                     return None;
                 }
                 Poll::Pending => {
-                    let out = self.shared.lock().unwrap().take();
+                    let out = self.shared.take();
                     if out.is_some() {
                         return out;
                     }
@@ -140,7 +252,9 @@ impl<Item, Fut: Future<Output = ()>> Iterator for Generator<Item, Fut> {
     }
 }
 
-impl<Item, E, Fut: Future<Output = Result<(), E>>> Iterator for TryGenerator<Item, E, Fut> {
+impl<Item, E, St: SharedState<Item = Item>, Fut: Future<Output = Result<(), E>>> Iterator
+    for TryGenerator<Item, E, St, Fut>
+{
     type Item = Result<Item, E>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -161,7 +275,7 @@ impl<Item, E, Fut: Future<Output = Result<(), E>>> Iterator for TryGenerator<Ite
                     };
                 }
                 Poll::Pending => {
-                    let out = self.shared.lock().unwrap().take();
+                    let out = self.shared.take();
                     if out.is_some() {
                         return Ok(out).transpose();
                     }
@@ -179,14 +293,13 @@ impl<Item, E, Fut: Future<Output = Result<(), E>>> Iterator for TryGenerator<Ite
 /// This type could have also been named Coroutine, but
 /// I thought it better to reserve that name for the async
 /// function.
-pub struct Communication<Item>(SharedState<Item>);
+pub struct Communication<Item, St: SharedState<Item = Item>>(St);
 
-impl<Item> Communication<Item> {
+impl<Item, St: SharedState<Item = Item>> Communication<Item, St> {
     /// Pass a single value to [Generator]. `yield_` acts as
     /// an async function.
     pub fn yield_(&self, item: Item) -> YieldFuture {
-        let mut lock = self.0.lock().unwrap();
-        lock.replace(item);
+        self.0.set(item);
         YieldFuture { done: false }
     }
 }
