@@ -93,10 +93,12 @@ impl<Item> SharedState for FastSharedState<Item> {
         Self(Rc::new(Cell::new(None)))
     }
 
+    #[inline]
     fn take(&self) -> Option<Self::Item> {
         self.0.take()
     }
 
+    #[inline]
     fn set(&self, val: Self::Item) {
         self.0.set(Some(val));
     }
@@ -123,10 +125,12 @@ impl<Item> SharedState for SyncSharedState<Item> {
         Self(Arc::new(Mutex::new(None)))
     }
 
+    #[inline]
     fn take(&self) -> Option<Self::Item> {
         self.0.lock().expect("no panics").take()
     }
 
+    #[inline]
     fn set(&self, val: Self::Item) {
         _ = self.0.lock().expect("no panics").insert(val);
     }
@@ -282,7 +286,9 @@ pub mod sync {
 struct Waker;
 
 impl Wake for Waker {
+    #[inline]
     fn wake(self: Arc<Self>) {}
+    #[inline]
     fn wake_by_ref(self: &Arc<Self>) {}
 }
 
@@ -295,6 +301,7 @@ impl<Item, St: SharedState<Item = Item>, Fut: Future<Output = ()>> Iterator
 {
     type Item = Item;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             return None;
@@ -325,6 +332,7 @@ impl<Item, E, St: SharedState<Item = Item>, Fut: Future<Output = Result<(), E>>>
 {
     type Item = Result<Item, E>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             return None;
@@ -366,6 +374,7 @@ pub struct Communication<Item, St: SharedState<Item = Item>>(St);
 impl<Item, St: SharedState<Item = Item>> Communication<Item, St> {
     /// Pass a single value to [Generator]. `yield_` acts as
     /// an async function.
+    #[inline]
     pub fn yield_(&self, item: Item) -> YieldFuture {
         self.0.set(item);
         YieldFuture { done: false }
@@ -384,6 +393,7 @@ impl Unpin for YieldFuture {}
 impl Future for YieldFuture {
     type Output = ();
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Why does it need this two-call hack?
         let this = self.get_mut();
