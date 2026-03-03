@@ -373,6 +373,7 @@ impl<Item, St: SharedState<Item = Item>> Communication<Item, St> {
 }
 
 /// Future returned by [Communication::yield_]
+#[must_use]
 pub struct YieldFuture {
     done: bool,
 }
